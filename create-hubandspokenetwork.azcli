@@ -1,0 +1,201 @@
+az account show -o table
+az account list -o table
+az account set -s 'Visual Studio Enterprise'
+az account set -s 'Microsoft Azure Sponsorship'
+az account set -s 'VS ENT ONT'
+
+az interactive 
+
+# var declaration
+sub=vsent
+sub=poc-hubspoke
+rgName=rg-hub-vnet-$sub
+location=canadacentral
+hubVNetName=vnet-hub-$sub
+prodVnetName=vnet-prod-$sub
+devVnetName=vnet-dev-$sub
+onpremVnetName=vnet-onprem-$sub
+
+# Side notes of design specs of interest. 
+# AddressSpace            = 10.11.0.0/16 
+# SubnetName              = Subnet1 
+# Subnet                  = 10.11.0.0/24 
+# GatewaySubnet           = 10.11.255.0/27 
+# LocalNetworkGatewayName = Site2 
+# Local Network Gateway Public IP           = <VPN device IP address>
+# LocalAddrPrefix1        = 10.0.0.0/24
+# LocalAddrPrefix2        = 20.0.0.0/24   
+# GatewayName             = VNet1GW 
+# PublicIP                = VNet1GWIP 
+# VPNType                 = RouteBased 
+# GatewayType             = Vpn 
+# ConnectionName          = VNet1toSite2
+
+az group create --name $rgName --location $location
+
+# Create Hub VNET
+az network vnet create -g $rgName --name $hubVNetName --address-prefixes 10.11.0.0/16 --location $location
+az network vnet subnet create -g $rgName --vnet-name $hubVNetName --name Management --address-prefix 10.11.1.0/24
+az network vnet subnet create -g $rgName --vnet-name $hubVNetName --name GatewaySubnet --address-prefix 10.11.254.0/27 # 10.11.254.0 - 10.11.254.31
+az network vnet subnet create -g $rgName --vnet-name $hubVNetName --name AzureFirewallSubnet --address-prefix 10.11.253.0/26 #10.11.253.0 - 10.11.253.63
+az network vnet subnet create -g $rgName --vnet-name $hubVNetName --name AppGatewaySubnet --address-prefix 10.11.252.0/26 #10.11.252.0 - 10.11.252.63
+az network vnet subnet create -g $rgName --vnet-name $hubVNetName --name AzureBastionSubnet --address-prefix 10.11.252.64/27 #10.11.252.64 - 10.11.252.95
+
+# Vnet Gateway
+az network public-ip create -g $rgName --name pip-hub-$sub --allocation-method dynamic --dns-name $hubVNetName 
+az network vnet-gateway create -g $rgName --name vgw-$sub --vnet $hubVNetName --public-ip-address pip-hub-$sub --gateway-type vpn --client-protocol SSTP --sku Basic
+az network vnet-gateway list -g $rgName
+
+
+# Create OnPrem VNET
+az network vnet create -g $rgName --name $onpremVnetName --address-prefixes 192.168.1.0/24  --location $location
+az network vnet subnet create -g $rgName --vnet-name $onpremVnetName --name Management --address-prefix 192.168.1.0/25
+az network vnet subnet create -g $rgName --vnet-name $onpremVnetName --name GatewaySubnet --address-prefix 192.168.1.128/28 # 192.168.1.0 - 10.11.254.31
+az network vnet subnet create -g $rgName --vnet-name $onpremVnetName --name Corp --address-prefix 192.168.1.144/28
+az network public-ip create -g $rgName --name pip-onprem-$sub --allocation-method dynamic --dns-name $onpremVnetName 
+az network vnet-gateway create -g $rgName --name vgw-onprem-$sub --vnet $onpremVnetName --public-ip-address pip-onprem-$sub --gateway-type vpn --client-protocol SSTP --sku Basic
+
+
+localGatewayIpAddress=$(az network public-ip show -g $rgName --name pip-onprem-$sub --query ipAddress) # public ip of onprem 
+presharedkey='s3cr3tK3y!'
+localGatewayName='OnPremNet1LocaGateway'
+az network local-gateway create --gateway-ip-address $localGatewayIpAddress --name $localGatewayName --resource-group $rgName --local-address-prefixes 10.0.0.0/16
+# VNET TO VNET VPN Connection
+az network vpn-connection create --name OnPremNet1toHub --resource-group $rgName --vnet-gateway1 vgw-$sub -l $location --shared-key $presharedkey --local-gateway2 $localGatewayName
+
+az network vpn-connection create --name OnPremNettoHub --resource-group $rgName --vnet-gateway1 vgw-$sub -l $location --shared-key $presharedkey --local-gateway2 $localGatewayName
+# create vpn connection  OnPremVnet to HubVnet
+vgwHubvnetId=$(az network vnet-gateway show -n vgw-$sub -g $rgName --query id)
+echo $vgwOnpremId
+echo $vgwHubvnetId
+az network vpn-connection create -n OnPremVNetToHubVNet -g $rgName --vnet-gateway1 vgw-onprem-$sub -l $location --shared-key "aabbcc" --vnet-gateway2 vgw-$sub
+az network vpn-connection show -n OnPremVNetToHubVNet -g $rgName
+# create vpn connection HubVnet to OnPremVnet
+
+# Create Prod VNET
+az network vnet create -g $rgName --name $prodVnetName --address-prefixes 10.13.0.0/16  --location $location
+az network vnet subnet create -g $rgName --vnet-name $prodVnetName --name Management --address-prefix 10.13.1.0/24
+az network vnet subnet create -g $rgName --vnet-name $prodVnetName --name Workload1 --address-prefix 10.13.2.0/24
+az network vnet subnet create -g $rgName --vnet-name $prodVnetName --name Workload2 --address-prefix 10.13.3.0/24
+az network vnet subnet create -g $rgName --vnet-name $prodVnetName --name Workload3 --address-prefix 10.13.4.0/24
+# Subnet NSG 
+az network nsg create -g $rgName -n Management-subnet -l $location -o table
+az network nsg create -g $rgName -n Workload1-subnet -l $location -o table
+az network nsg create -g $rgName -n Workload2-subnet -l $location -o table
+az network nsg create -g $rgName -n Workload3-subnet -l $location -o table
+
+
+# Create QA (Spoke2) VNET
+az network vnet create -g $rgName --name $qaVnetName --address-prefixes $qaVnetAddressSpace  --location eastus
+az network vnet subnet create -g $rgName --vnet-name $qaVnetName --name dr-subnet --address-prefix 70.2.0.0/26
+
+
+# Create Dev VNET
+az network vnet create -g $rgName --name $devVnetName --address-prefixes 10.12.0.0/16  --location $location
+az network vnet subnet create -g $rgName --vnet-name $devVnetName --name Management --address-prefix 10.12.1.0/24
+az network vnet subnet create -g $rgName --vnet-name $devVnetName --name Workload1 --address-prefix 10.12.2.0/24
+az network vnet subnet create -g $rgName --vnet-name $devVnetName --name Workload2 --address-prefix 10.12.3.0/24
+
+
+# local network gateway
+
+# Connections
+
+# Peering
+az network vnet peering create -g $rgName --name HUBtoProd --vnet-name $hubVNetName --remote-vnet $prodVnetName --allow-forwarded-traffic --allow-vnet-access --allow-gateway-transit
+az network vnet peering create -g $rgName --name ProdtoHUB --vnet-name $prodVnetName --remote-vnet $hubVNetName --allow-vnet-access --use-remote-gateways #--allow-forwarded-traffic 
+
+hubVnetId=$(az network vnet show -g $rgName --name $hubVNetName --query id)
+az network vnet peering create -g $rgName --name HUBtoDEV --vnet-name $hubVNetName --remote-vnet $devVnetName --allow-forwarded-traffic --allow-vnet-access #--allow-gateway-transit
+az network vnet peering create -g $rgName --name DEVtoHUB --vnet-name $devVnetName --remote-vnet $hubVNetName --allow-vnet-access #--allow-forwarded-traffic 
+
+
+## Azure Firewall - Advanced Optional
+azFirewallName=AzFW01
+pipfw=52.149.51.137
+
+az network firewall create -g $rgName -n $azFirwallName --private-ranges 10.0.0.0 10.0.0.0/16 IANAPrivateRanges --sku
+
+az network firewall list -g $rgName -o table
+az network firewall show -g $rgName -n $azFirewallName
+
+
+# Configure NAT Rules
+# protocols {Any, ICMP, TCP, UDP}  translated-port Dnat Snat
+az network firewall nat-rule create -g $rgName --firewall-name $azFirewallName --collection-name public-websites --name websites \
+    --protocols TCP --source-addresses * --destination-addresses $pipfw --destination-ports 80  \
+     --translated-port 80 --translated-address 70.1.0.4 --action Dnat --priority 100
+
+
+## Route Table 
+# create route table on gateway subnet
+# UDR
+fwprivaddr=70.0.0.4
+fwRouteTableName=hubtolive-route
+az network route-table create --name $fwRouteTableName -g $rgName -l $location --disable-bgp-route-propagation false
+az network route-table route create -g $rgName --name ToLifeSubnet-Route --route-table-name $fwRouteTableName --address-prefix 70.1.0.0/24 \
+  --next-hop-type VirtualAppliance --next-hop-ip-address $fwprivaddr
+az network vnet subnet list --vnet-name $hubVNetName -g $rgName -o table
+workloadSubnet=gateway
+workloadSubnetAddressPrefix=70.1.0.0/26
+az network vnet subnet update -n $workloadSubnet \
+    -g $rgName --vnet-name $hubVNetName --address-prefixes $workloadSubnetAddressPrefix --route-table $fwRouteTableName
+
+az network route-table create --name $fwRouteTableName -g $rgName -l $location --disable-bgp-route-propagation false
+az network route-table route create -g $rgName --name ToLifeSubnet-Route --route-table-name $fwRouteTableName --address-prefix 70.1.0.0/24 \
+  --next-hop-type VirtualAppliance --next-hop-ip-address $fwprivaddr
+az network vnet subnet list --vnet-name $hubVNetName -g $rgName -o table
+workloadSubnet=live-bi-subnet
+workloadSubnetAddressPrefix=70.1.0.0/26
+az network vnet subnet update -n $workloadSubnet \
+    -g $rgName --vnet-name $hubVNetName --address-prefixes $workloadSubnetAddressPrefix --route-table $fwRouteTableName
+
+
+
+
+
+## Test VMs
+az network vnet subnet list -g $rgName --vnet-name $prodVnetName -o table
+subnetId=$(az network vnet subnet show -g $rgName --vnet-name $prodVnetName --name Workload1 --query id)
+VmName='ProdVM'
+az vm create -g $rgName -n $VmName --image win2016datacenter --admin-username rkadmin --admin-password 'P@ssword1234' --size Standard_B2s --storage-sku Standard_LRS -l $location --os-disk-size-gb 127 --subnet Workload1 --vnet-name $prodVnetName \
+    --public-ip-address "" --nsg none
+az vm run-command invoke  --command-id RunPowerShellScript --name $VmName -g $rgName  \
+    --scripts 'Add-WindowsFeature Web-Server; Add-Content -Path "C:\inetpub\wwwroot\Default.htm" -Value $($env:computername)'
+
+VmName='DR-VM'
+existingSubnetName='dr-subnet'    
+az network vnet subnet list -g $rgName --vnet-name $qaVnetName -o table
+subnetId=$(az network vnet subnet show -g $rgName --vnet-name $qaVnetName --name dr-subnet --query id)
+az vm create -g $rgName -n $VmName --image win2016datacenter --admin-username rkadmin --admin-password 'P@ssword1234' --size Standard_B1ms --storage-sku Standard_LRS -l $location --os-disk-size-gb 127 --subnet $existingSubnetName --vnet-name $qaVnetName --public-ip-address ""
+az vm run-command invoke  --command-id RunPowerShellScript --name $VmName -g $rgName  \
+    --scripts 'Add-WindowsFeature Web-Server; Add-Content -Path "C:\inetpub\wwwroot\Default.htm" -Value $($env:computername)'
+
+VmName3='OnPremVM'
+existingSubnetName='Corp'    
+az vm create -g $rgName -n $VmName --image win2016datacenter --admin-username rkadmin --admin-password 'P@ssword1234' --size Standard_B2s --storage-sku Standard_LRS -l $location --os-disk-size-gb 127 --subnet $existingSubnetName --vnet-name $onpremVnetName  
+az vm run-command invoke  --command-id RunPowerShellScript --name $VmName3 -g $rgName  \
+    --scripts 'Add-WindowsFeature Web-Server; Add-Content -Path "C:\inetpub\wwwroot\Default.htm" -Value $($env:computername)'
+
+
+az vm deallocate -g $rgName -n ProdVM
+az vm deallocate -g $rgName -n OnPremVM
+
+## RRAS install on FE VM rk-sp16 rg 
+
+# https://docs.microsoft.com/en-us/windows-server/remote/remote-access/remote-access#bkmk_rras
+
+
+# Stop RRAS, set cert, start RRAS
+Import-Module RemoteAccess
+Stop-Service RemoteAccess
+Set-RemoteAccess -SslCertificate $cert
+Start-Service RemoteAccess
+
+# https://codeandkeep.com/PowerShell-Windows-Routing/
+
+# https://www.kjctech.net/install-and-configure-route-and-remote-access-service-on-server-core/
+Install-WindowsFeature RemoteAccess
+Install-WindowsFeature RSAT-RemoteAccess-PowerShell
+Install-WindowsFeature Routing
+Install-WindowsFeature RSAT-RemoteAccess
