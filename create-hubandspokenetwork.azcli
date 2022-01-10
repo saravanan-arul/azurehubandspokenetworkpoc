@@ -1,8 +1,6 @@
 az account show -o table
 az account list -o table
 az account set -s 'Visual Studio Enterprise'
-az account set -s 'Microsoft Azure Sponsorship'
-az account set -s 'VS ENT ONT'
 
 az interactive 
 
