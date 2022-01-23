@@ -1,0 +1,49 @@
+
+
+## Test VMs - serve as jump boxes and/or testing source and target traffic between vnets.
+az network vnet subnet list -g $rgName --vnet-name $prodVnetName -o table
+subnetId=$(az network vnet subnet show -g $rgName --vnet-name $prodVnetName --name Workload1 --query id)
+VmName='ProdVM'
+az vm create -g $rgName -n $VmName --image win2016datacenter --admin-username rkadmin --admin-password 'P@ssword1234' --size Standard_B2s --storage-sku Standard_LRS -l $location --os-disk-size-gb 127 --subnet Workload1 --vnet-name $prodVnetName \
+    --public-ip-address "" --nsg none
+az vm run-command invoke  --command-id RunPowerShellScript --name $VmName -g $rgName  \
+    --scripts 'Add-WindowsFeature Web-Server; Add-Content -Path "C:\inetpub\wwwroot\Default.htm" -Value $($env:computername)'
+
+VmName='DR-VM'
+existingSubnetName='dr-subnet'    
+az network vnet subnet list -g $rgName --vnet-name $qaVnetName -o table
+subnetId=$(az network vnet subnet show -g $rgName --vnet-name $qaVnetName --name dr-subnet --query id)
+az vm create -g $rgName -n $VmName --image win2016datacenter --admin-username rkadmin --admin-password 'P@ssword1234' --size Standard_B1ms --storage-sku Standard_LRS -l $location --os-disk-size-gb 127 --subnet $existingSubnetName --vnet-name $qaVnetName --public-ip-address ""
+az vm run-command invoke  --command-id RunPowerShellScript --name $VmName -g $rgName  \
+    --scripts 'Add-WindowsFeature Web-Server; Add-Content -Path "C:\inetpub\wwwroot\Default.htm" -Value $($env:computername)'
+
+VmName3='OnPremVM'
+existingSubnetName='Corp'    
+az vm create -g $rgName -n $VmName --image win2016datacenter --admin-username rkadmin --admin-password 'P@ssword1234' --size Standard_B2s --storage-sku Standard_LRS -l $location --os-disk-size-gb 127 --subnet $existingSubnetName --vnet-name $onpremVnetName  
+az vm run-command invoke  --command-id RunPowerShellScript --name $VmName3 -g $rgName  \
+    --scripts 'Add-WindowsFeature Web-Server; Add-Content -Path "C:\inetpub\wwwroot\Default.htm" -Value $($env:computername)'
+
+
+az vm deallocate -g $rgName -n ProdVM
+az vm deallocate -g $rgName -n OnPremVM
+
+# Optional use
+
+## RRAS install on FE VM rk-sp16 rg 
+
+# https://docs.microsoft.com/en-us/windows-server/remote/remote-access/remote-access#bkmk_rras
+
+# Stop RRAS, set cert, start RRAS
+# Run commands within VM to configure.
+Import-Module RemoteAccess
+Stop-Service RemoteAccess
+Set-RemoteAccess -SslCertificate $cert
+Start-Service RemoteAccess
+
+# https://codeandkeep.com/PowerShell-Windows-Routing/
+
+# https://www.kjctech.net/install-and-configure-route-and-remote-access-service-on-server-core/
+Install-WindowsFeature RemoteAccess
+Install-WindowsFeature RSAT-RemoteAccess-PowerShell
+Install-WindowsFeature Routing
+Install-WindowsFeature RSAT-RemoteAccess
