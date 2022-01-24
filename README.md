@@ -1,4 +1,4 @@
-# azurehubandspokenetworkpoc
+# Azure Hub and Spoke Virtual Network POC
 
 Purpose: A proof of concept of a hub and spoke azure network architecture with a site to site vpn to a simulated onpremises network. For training and educational purposes.
 
