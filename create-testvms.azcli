@@ -1,5 +1,3 @@
-
-
 ## Test VMs - serve as jump boxes and/or testing source and target traffic between vnets.
 az network vnet subnet list -g $rgName --vnet-name $prodVnetName -o table
 subnetId=$(az network vnet subnet show -g $rgName --vnet-name $prodVnetName --name Workload1 --query id)
